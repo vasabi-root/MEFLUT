@@ -41,8 +41,8 @@ class FastGuidedFilter(nn.Module):
         b = mean_y - A * mean_x
 
         ## mean_A; mean_b
-        mean_A = F.upsample(A, (h_hrx, w_hrx), mode='bilinear')
-        mean_b = F.upsample(b, (h_hrx, w_hrx), mode='bilinear')
+        mean_A = F.interpolate(A, (h_hrx, w_hrx), mode='bilinear')
+        mean_b = F.interpolate(b, (h_hrx, w_hrx), mode='bilinear')
 
         return mean_A*hr_x+mean_b
 

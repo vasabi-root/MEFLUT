@@ -1,5 +1,6 @@
 import numpy as np
 from torchvision import transforms
+from torchvision.transforms.functional import InterpolationMode
 import torch
 from PIL import Image
 import collections
@@ -8,7 +9,7 @@ RANDOM_RESOLUTIONS = [512, 768, 1024, 1280, 1536]
 
 
 class BatchRandomResolution(object):
-    def __init__(self, size=None, interpolation=Image.BILINEAR):
+    def __init__(self, size=None, interpolation=InterpolationMode.BILINEAR):
 
         assert isinstance(size, int) or (isinstance(size, collections.Iterable) and len(size) == 2) or (size is None)
         self.size = size
@@ -28,7 +29,7 @@ class BatchRandomResolution(object):
 
 
 class BatchTestResolution(object):
-    def __init__(self, size=None, interpolation=Image.BILINEAR):
+    def __init__(self, size=None, interpolation=InterpolationMode.BILINEAR):
 
         assert isinstance(size, int) or (isinstance(size, collections.Iterable) and len(size) == 2) or (size is None)
         self.size = size

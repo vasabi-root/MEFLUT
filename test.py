@@ -7,6 +7,7 @@ from torch.utils.data import DataLoader
 from torch.optim import lr_scheduler
 from torch.autograd import Variable
 from torchvision import transforms, utils
+from torchvision.transforms.functional import InterpolationMode
 from models.model import MEFNetwork, Fusion, init_parameters
 from losses.mefssim import MEF_MSSSIM
 from datasets.ImageDataset import ImageSeqDataset
@@ -17,25 +18,24 @@ EPS = 1e-8
 
 class Test(object):
     def __init__(self, config):
-
-        ############# trainting and testing transforms ##############################
+        ############# testing transforms ##############################
         torch.manual_seed(config.seed)
         self.test_hr_transform = transforms.Compose([
-            BatchTestResolution(config.test_high_size, interpolation=2),
+            BatchTestResolution(config.test_high_size, interpolation=InterpolationMode.BILINEAR),
             BatchToTensor(),
             BatchRGBToYCbCr()
             ])
         
         self.test_lr_transform = transforms.Compose([
-            BatchTestResolution(config.low_size, interpolation=2),
+            BatchTestResolution(config.low_size, interpolation=InterpolationMode.BILINEAR),
             BatchToTensor(),
             BatchRGBToYCbCr()
             ])
 
         ############# testing set configuration ##############################
         self.test_batch_size = 1
-        self.test_data = ImageSeqDataset(csv_file=os.path.join(config.testset, 'test.txt'),
-                                         hr_img_seq_dir=config.testset,
+        self.test_data = ImageSeqDataset(hr_img_seq_dir=config.testset,
+                                         n_frames=self.n_frames,
                                          hr_transform=self.test_hr_transform,
                                          lr_transform=self.test_lr_transform)
 

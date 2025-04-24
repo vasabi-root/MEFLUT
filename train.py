@@ -7,47 +7,49 @@ from torch.utils.data import DataLoader
 from torch.optim import lr_scheduler
 from torch.autograd import Variable
 from torchvision import transforms, utils
+from torchvision.transforms.functional import InterpolationMode
 from models.model import MEFNetwork, Fusion, init_parameters
 from losses.mefssim import MEF_MSSSIM
 from datasets.ImageDataset import ImageSeqDataset
 from datasets.batch_transformers import BatchRandomResolution, BatchToTensor, BatchRGBToYCbCr, YCbCrToRGB, BatchTestResolution
 from PIL import Image
 from torch.utils.tensorboard import SummaryWriter
+import gc
 EPS = 1e-8
 
 class Train(object):
     def __init__(self, config):
-
-        ############# trainting transforms ##############################
+        self.n_frames = config.n_frames
+        ############# training transforms ##############################
         torch.manual_seed(config.seed)
         self.train_hr_transform = transforms.Compose([
-            BatchRandomResolution(config.high_size, interpolation=2),
+            BatchRandomResolution(config.high_size, interpolation=InterpolationMode.BILINEAR),
             BatchToTensor(),
             BatchRGBToYCbCr()
             ])
         
         self.train_lr_transform = transforms.Compose([
-            BatchRandomResolution(config.low_size, interpolation=2),
+            BatchRandomResolution(config.low_size, interpolation=InterpolationMode.BILINEAR),
             BatchToTensor(),
             BatchRGBToYCbCr()
             ])
         self.test_lr_transform =  transforms.Compose([
-           BatchRandomResolution(config.low_size, interpolation=2),
+           BatchRandomResolution(config.low_size, interpolation=InterpolationMode.BILINEAR),
            BatchToTensor(),
            BatchRGBToYCbCr()
         ])
         self.test_hr_transform = transforms.Compose([
-            BatchTestResolution(config.test_high_size, interpolation=2),
+            BatchTestResolution(config.test_high_size, interpolation=InterpolationMode.BILINEAR),
             BatchToTensor(),
             BatchRGBToYCbCr()
             ])
         ############# training set configuration ##############################
         self.train_batch_size = 1
         self.test_batch_size = 1
-        self.train_data = ImageSeqDataset(csv_file=os.path.join(config.trainset, 'train.txt'),
-                                         hr_img_seq_dir=config.trainset,
-                                         hr_transform=self.train_hr_transform,
-                                         lr_transform=self.train_lr_transform)
+        self.train_data = ImageSeqDataset(hr_img_seq_dir=config.trainset,
+                                          n_frames=self.n_frames,
+                                          hr_transform=self.train_hr_transform,
+                                          lr_transform=self.train_lr_transform)
 
         self.train_loader = DataLoader(self.train_data,
                                       batch_size=self.train_batch_size,
@@ -55,8 +57,8 @@ class Train(object):
                                       pin_memory=True,
                                       num_workers=4)
         
-        self.test_data = ImageSeqDataset(csv_file=os.path.join(config.testset, 'test.txt'), # mfdb test set
-                                         hr_img_seq_dir=config.testset,
+        self.test_data = ImageSeqDataset(hr_img_seq_dir=config.testset,
+                                         n_frames=self.n_frames,
                                          hr_transform=self.test_hr_transform,
                                          lr_transform=self.test_lr_transform)
 
@@ -65,13 +67,22 @@ class Train(object):
                                       shuffle=False,
                                       pin_memory=True,
                                       num_workers=4)
+        ############# initialize the model ##############################
+        self.radius = config.radius
+        self.eps = config.eps
+        self.layers = config.layers
+        self.width = config.width
+        self.model = MEFNetwork(is_guided=True, n_frames=self.n_frames, radius=self.radius, eps=self.eps, layers=self.layers, width=self.width)
+        init_parameters(self.model)
+        self.model_name = type(self.model).__name__
         ############# train ##############################
         self.offline_test_size = config.offline_test_size
         self.luts_path = config.train_luts_path
         self.test_results = []
         self.train_loss = []
-        self.n_frames = config.n_frames
         self.start_epoch = 0
+        self.start_step = 0
+        self.max_eval_ssim = 0
         self.max_epochs = config.max_epochs
         self.initial_lr = config.lr
         if self.initial_lr is None:
@@ -83,14 +94,6 @@ class Train(object):
                                         last_epoch=self.start_epoch-1,
                                         step_size=config.decay_interval,
                                         gamma=config.decay_ratio)
-        ############# initialize the model ##############################
-        self.radius = config.radius
-        self.eps = config.eps
-        self.layers = config.layers
-        self.width = config.width
-        self.model = MEFNetwork(is_guided=True, n_frames=self.n_frames, radius=self.radius, eps=self.eps, layers=self.layers, width=self.width)
-        init_parameters(self.model)
-        self.model_name = type(self.model).__name__
         ############# loss ##############################
         self.loss_fn = MEF_MSSSIM(is_lum=True)
         self.config = config
@@ -125,6 +128,9 @@ class Train(object):
     
     def _train_single_epoch(self, epoch):
         # initialize logging system
+        gc.collect()
+        torch.cuda.empty_cache()
+
         num_steps_per_epoch = len(self.train_loader)
         local_counter = epoch * num_steps_per_epoch + 1
         start_time = time.time()
@@ -155,7 +161,7 @@ class Train(object):
                 I_lr = I_lr.cuda()
 
             self.optimizer.zero_grad()
-            O_hr, _, _ = self.model(I_lr, I_hr)
+            O_hr, _ = self.model(I_lr, I_hr)
 
             self.loss = -self.loss_fn(O_hr, I_hr) #+ self.loss_mask_tv(O_w)
             self.loss.backward()
@@ -177,7 +183,6 @@ class Train(object):
                                 examples_per_sec, duration_corrected))
 
             local_counter += 1
-            self.start_step = 0
             start_time = time.time()
             start_time = time.time()
 
@@ -204,7 +209,6 @@ class Train(object):
                     'test_results': self.test_results,
                     'best_results': self.max_eval_ssim
                 }, model_name)
-            print("project_name:", self.project_name)
             out_str = 'Epoch {} Testing: Average MEF-SSIM: {:.4f} max epoch {}, MEF-SSIM: {:.4f}'.format(epoch, test_results,
                                                                                                self.max_eval_epoch, self.max_eval_ssim)
             with open(self.ckpt_path + "/res_log.txt", 'a') as f:
@@ -277,6 +281,7 @@ class Train(object):
 
             O_hr_RGB = YCbCrToRGB()(torch.cat((O_hr, Cb_f, Cr_f), dim=1))
             self._save_image(O_hr_RGB, self.fused_img_path, str(case[0]).split('/')[-1])
+            print(f'Quality of tested {case[0]!r}: {q}')
 
         avg_quality = sum(scores) / len(scores)
         print("avg_quality:", avg_quality)
@@ -308,7 +313,7 @@ class Train(object):
             if self.use_cuda:
                 I_hr = I_hr.cuda()
                 I_lr = I_lr.cuda()
-            O_hr, W_hr, _ = self.model(I_lr, I_hr)
+            O_hr, W_hr = self.model(I_lr, I_hr)
             [weights[i].write(str(np.mean(np.array([np.mean(W_hr[i:i+1].cpu().detach().numpy(), 0)]))) + ',') for i in range(self.n_frames)]
 
     def _save_image(self, image, path, name):
@@ -345,6 +350,7 @@ class Train(object):
         print(all_times)
         return os.path.join(path, all_times[0])
 
+    @staticmethod
     def _save_checkpoint(state, filename='checkpoint.pth.tar'):
         # if os.path.exists(filename):
         #     shutil.rmtree(filename)

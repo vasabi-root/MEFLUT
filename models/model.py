@@ -45,7 +45,7 @@ class Fusion(nn.Module):
         if self.is_guided:
             w_hr = self.gf(x_lr, w_lr, x_hr)
         else:
-            w_hr = F.upsample(w_lr, x_hr.size()[2:], mode='bilinear')
+            w_hr = F.interpolate(w_lr, x_hr.size()[2:], mode='bilinear')
 
         w_hr = torch.abs(w_hr)
         w_hr = (w_hr + EPS) / torch.sum((w_hr + EPS), dim=0)
@@ -148,7 +148,7 @@ class MEFNetwork(nn.Module):
         if self.is_guided:
             w_hr = self.gf(x_lr, w_lr, x_hr)
         else:
-            w_hr = F.upsample(w_lr, x_hr.size()[2:], mode='bilinear')
+            w_hr = F.interpolate(w_lr, x_hr.size()[2:], mode='bilinear')
         w_hr = torch.abs(w_hr)
         w_hr = (w_hr + EPS) / torch.sum((w_hr + EPS), dim=0)
         o_hr = torch.sum(w_hr * x_hr, dim=0, keepdim=True).clamp(0, 1)
