@@ -12,29 +12,29 @@ def parse_config():
     parser.add_argument("--seed", type=int, default=2021)
 
     parser.add_argument("--testset", type=str, default="data")
-    parser.add_argument("--trainset", type=str, default="data")
+    parser.add_argument("--trainset", type=str, default="data/train")
 
     parser.add_argument('--ckpt_path', default='checkpoints', type=str,
                         metavar='PATH', help='path to checkpoints')
     parser.add_argument('--ckpt', default=None, type=str, help='name of the checkpoint to load')
     parser.add_argument('--fused_img_path', default='fused_result_1dluts_eval', type=str,
                         metavar='PATH', help='path to save images')
-    parser.add_argument('--luts_path', default='luts', type=str,
+    parser.add_argument('--luts_path', default='luts_test/6frames', type=str,
                         metavar='PATH', help='path to save test luts')
-    parser.add_argument('--train_luts_path', default='train_luts', type=str,
+    parser.add_argument('--train_luts_path', default='train_luts/6frames', type=str,
                         metavar='PATH', help='path to save train luts')
     parser.add_argument("--low_size", type=int, default=128)
     parser.add_argument("--high_size", type=int, default=512, help='None means random resolution')
     parser.add_argument("--test_high_size", type=int, default=2048)
-    parser.add_argument("--n_frames", type=int, default=2)
+    parser.add_argument("--n_frames", type=int, default=6)
     parser.add_argument("--offline_test_size", type=int, default=50)
     parser.add_argument("--resume", type=bool, default=False)
     parser.add_argument("--radius", type=int, default=2)
     parser.add_argument("--eps", type=float, default=1)
     parser.add_argument("--layers", type=int, default=3)
     parser.add_argument("--width", type=int, default=24)
-    parser.add_argument("--epochs_per_eval", type=int, default=1)#
-    parser.add_argument("--epochs_per_save", type=int, default=10)#
+    parser.add_argument("--epochs_per_eval", type=int, default=10)#
+    parser.add_argument("--epochs_per_save", type=int, default=5)#
     parser.add_argument("--lr", type=float, default=1e-4)
     parser.add_argument("--decay_interval", type=int, default=1000)
     parser.add_argument("--decay_ratio", type=float, default=0.1)
