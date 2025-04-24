@@ -55,7 +55,7 @@ class Train(object):
                                       batch_size=self.train_batch_size,
                                       shuffle=True,
                                       pin_memory=True,
-                                      num_workers=4)
+                                      num_workers=1)
         
         self.test_data = ImageSeqDataset(hr_img_seq_dir=config.testset,
                                          n_frames=self.n_frames,
@@ -66,7 +66,7 @@ class Train(object):
                                       batch_size=self.test_batch_size,
                                       shuffle=False,
                                       pin_memory=True,
-                                      num_workers=4)
+                                      num_workers=1)
         ############# initialize the model ##############################
         self.radius = config.radius
         self.eps = config.eps
