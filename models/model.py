@@ -48,7 +48,11 @@ class Fusion(nn.Module):
             w_hr = F.interpolate(w_lr, x_hr.size()[2:], mode='bilinear')
 
         w_hr = torch.abs(w_hr)
-        w_hr = (w_hr + EPS) / torch.sum((w_hr + EPS), dim=0)
+
+        sum_weights = torch.sum(w_hr + EPS, dim=0)
+        sum_weights = torch.clamp(sum_weights, min=EPS)
+        w_hr = (w_hr + EPS) / sum_weights
+
         o_hr = torch.sum(w_hr * x_hr, dim=0, keepdim=True).clamp(0, 1)
         return o_hr, w_hr
 
@@ -150,6 +154,10 @@ class MEFNetwork(nn.Module):
         else:
             w_hr = F.interpolate(w_lr, x_hr.size()[2:], mode='bilinear')
         w_hr = torch.abs(w_hr)
-        w_hr = (w_hr + EPS) / torch.sum((w_hr + EPS), dim=0)
+
+        sum_weights = torch.sum(w_hr + EPS, dim=0)
+        sum_weights = torch.clamp(sum_weights, min=EPS) 
+        w_hr = (w_hr + EPS) / sum_weights
+        
         o_hr = torch.sum(w_hr * x_hr, dim=0, keepdim=True).clamp(0, 1)
         return o_hr, w_hr
