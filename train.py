@@ -3,6 +3,8 @@ import time
 import torch
 import torch.optim as optim
 import numpy as np
+from PIL import Image
+from pathlib import Path
 from torch.utils.data import DataLoader
 from torch.optim import lr_scheduler
 from torch.autograd import Variable
@@ -16,6 +18,24 @@ from PIL import Image
 from torch.utils.tensorboard import SummaryWriter
 import gc
 EPS = 1e-8
+
+def save_image_tensor(tensor: torch.Tensor, name: Path):
+    np_img = tensor.squeeze(0).mul(255).clamp_(0, 255).permute(1, 2, 0).to("cpu", torch.uint8).numpy()
+    img = Image.fromarray(np_img)
+    img.save(name)
+
+
+def fuse_YCbCr(bunch: torch.Tensor, Y_f: torch.Tensor):
+    Ys = bunch[:, 0].unsqueeze(1)
+    Cb = bunch[:, 1].unsqueeze(1)
+    Cr = bunch[:, 2].unsqueeze(1)
+    Wb = (torch.abs(Cb - 0.5)) / torch.sum(torch.abs(Cb - 0.5).clamp(1e-6), dim=0)
+    Wr = (torch.abs(Cr - 0.5)) / torch.sum(torch.abs(Cr - 0.5).clamp(1e-6), dim=0)
+    Cb_f = torch.sum(Wb * Cb, dim=0, keepdim=True).clamp(0, 1)
+    Cr_f = torch.sum(Wr * Cr, dim=0, keepdim=True).clamp(0, 1)
+    return torch.cat((Y_f, Cb_f, Cr_f), dim=1)
+
+
 
 class Train(object):
     def __init__(self, config):
@@ -55,7 +75,7 @@ class Train(object):
                                       batch_size=self.train_batch_size,
                                       shuffle=True,
                                       pin_memory=True,
-                                      num_workers=1)
+                                      num_workers=2)
         
         self.test_data = ImageSeqDataset(hr_img_seq_dir=config.testset,
                                          n_frames=self.n_frames,
@@ -66,7 +86,7 @@ class Train(object):
                                       batch_size=self.test_batch_size,
                                       shuffle=False,
                                       pin_memory=True,
-                                      num_workers=1)
+                                      num_workers=2)
         ############# initialize the model ##############################
         self.radius = config.radius
         self.eps = config.eps
@@ -110,20 +130,42 @@ class Train(object):
         self.epochs_per_eval = config.epochs_per_eval
         self.epochs_per_save = config.epochs_per_save
 
+        self.save_dir = Path(config.fused_img_path)
+        self.train_results_dir = self.save_dir / 'train'
+        self.train_results_images = self.train_results_dir / 'images'
+        self.train_results_weights = self.train_results_dir / 'weights'
+
+        self.test_results_dir = self.save_dir / 'test'
+        self.test_results_images = self.test_results_dir / 'images'
+        self.test_results_weights = self.test_results_dir / 'weights'
+
+        for dir in [
+            self.train_results_images, self.train_results_weights,
+            self.test_results_images, self.test_results_weights
+        ]:
+            os.makedirs(dir, exist_ok=True)
+
+        torch.autograd.set_detect_anomaly(True)
+
         if config.resume:
             if config.ckpt:
                 ckpt = os.path.join(self.ckpt_path, config.ckpt)
                 print("ckpt:", ckpt)
             else:
                 ckpt = self._get_latest_checkpoint(path=self.ckpt_path)
-            self._load_checkpoint(ckpt=ckpt)
+            self._load_checkpoint(self, ckpt)
 
 
     
 
     def fit(self):
+        self.stagnation = 0
         for epoch in range(self.start_epoch, self.max_epochs):
             _ = self._train_single_epoch(epoch)
+            if epoch > 0 and self.train_loss[-1] - self.train_loss[-2] < 1e-3:
+                self.stagnation += 1
+            else:
+                self.stagnation = 0
 
     
     def _train_single_epoch(self, epoch):
@@ -143,7 +185,7 @@ class Train(object):
         print('Adam learning rate: {:f}'.format(self.optimizer.param_groups[0]['lr']))
         for step, sample_batched in enumerate(self.train_loader, 0):
             # TODO: remove this after debugging
-            i_hr, i_lr = sample_batched['I_hr'], sample_batched['I_lr']
+            i_hr, i_lr, case = sample_batched['I_hr'], sample_batched['I_lr'], sample_batched['case']
             i_hr = torch.squeeze(i_hr, dim=0)
             i_lr = torch.squeeze(i_lr, dim=0)
 
@@ -161,12 +203,25 @@ class Train(object):
                 I_lr = I_lr.cuda()
 
             self.optimizer.zero_grad()
-            O_hr, _ = self.model(I_lr, I_hr)
+            O_hr, W_hr = self.model(I_lr, I_hr)
 
-            self.loss = -self.loss_fn(O_hr, I_hr) #+ self.loss_mask_tv(O_w)
+            ql, qcs = self.loss_fn(O_hr, I_hr, True)
+            if self.stagnation >= 5:
+                self.loss = -ql
+            else:
+                self.loss = -ql*qcs
+
+            with open(self.train_results_dir / 'mef-ssim.txt', 'a') as f:
+                f.write(f'{(ql*qcs).item()},')
+            with open(self.train_results_dir / 'l_mmap.txt', 'a') as f:
+                f.write(f'{ql.item()},')
+
+
             self.loss.backward()
             self.optimizer.step()
             q = -self.loss.data.item()
+            rgb = YCbCrToRGB()(fuse_YCbCr(i_hr.to(O_hr.get_device() if self.use_cuda else 'cpu'), O_hr))
+            self.save_results(rgb, W_hr, case[0], is_train=True)
 
             # statistics
             running_loss = beta * running_loss + (1 - beta) * q
@@ -280,12 +335,29 @@ class Train(object):
             scores.append(q.data.numpy())
 
             O_hr_RGB = YCbCrToRGB()(torch.cat((O_hr, Cb_f, Cr_f), dim=1))
-            self._save_image(O_hr_RGB, self.fused_img_path, str(case[0]).split('/')[-1])
+            # self._save_image(O_hr_RGB, self.fused_img_path, str(case[0]).split('/')[-1])
             print(f'Quality of tested {case[0]!r}: {q}')
+            self.save_results(O_hr_RGB, W_hr, case[0], is_train=False)
 
         avg_quality = sum(scores) / len(scores)
         print("avg_quality:", avg_quality)
         return avg_quality
+    
+    def save_results(self, output: torch.Tensor, weights: torch.Tensor, name, is_train=True):
+        if is_train:
+            images_dir = self.train_results_images
+            weights_dir = self.train_results_weights
+        else:
+            images_dir = self.test_results_images
+            weights_dir = self.test_results_weights
+        
+        name = str(name)
+        weights_dir = weights_dir / name
+        os.makedirs(weights_dir, exist_ok=True)
+
+        save_image_tensor(output, (images_dir / name).with_suffix('.jpg'))
+        for i, weight in enumerate(weights):
+            save_image_tensor(weight.expand_as(output), (weights_dir / str(i)).with_suffix('.png'))
 
     
     def generate_offline_lut(self):
@@ -328,7 +400,7 @@ class Train(object):
     def _load_checkpoint(self, ckpt):
         if os.path.isfile(ckpt):
             print("[*] loading checkpoint '{}'".format(ckpt))
-            checkpoint = torch.load(ckpt)
+            checkpoint = torch.load(ckpt, weights_only=False)
             self.start_epoch = checkpoint['epoch']+1
             self.train_loss = checkpoint['train_loss']
             self.test_results = checkpoint['test_results']
