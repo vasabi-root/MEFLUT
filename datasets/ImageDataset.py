@@ -6,6 +6,7 @@ import pandas as pd
 from PIL import Image
 from torch.utils.data import Dataset
 from PIL import Image
+from math import ceil
 IMG_EXTENSIONS = ['.jpg', '.jpeg', '.png', '.ppm', '.bmp', '.pgm', '.tif']
 
 
@@ -84,19 +85,30 @@ class ImageSeqDataset(Dataset):
 			samples: a Tensor that represents a video segment.
 		"""
 		hr_seq_dir = os.path.join(self.hr_root, str(self.seqs[index]))
-		I = [Image.open(os.path.join(hr_seq_dir, filename)) for filename in sorted(os.listdir(hr_seq_dir), key=lambda x:int(x.rstrip('.jpg')))]#self.loader(hr_seq_dir)
-
-		I_hr, I_lr = I, I
+		I = self.loader(hr_seq_dir)
+		
 		if self.hr_transform is not None:
 			I_hr = self.hr_transform(I)
 		if self.lr_transform is not None:
 			I_lr = self.lr_transform(I)
+
+		I_hr = sorted(I_hr, key=lambda x: x.mean())
+		I_lr = sorted(I_lr, key=lambda x: x.mean())
+
+		I_hr = self._remove_extra_exposures(I_hr)
+		I_lr = self._remove_extra_exposures(I_lr)
 
 		I_hr = torch.stack(I_hr, 0).contiguous()
 		I_lr = torch.stack(I_lr, 0).contiguous()
 
 		sample = {'I_hr': I_hr, 'I_lr': I_lr, 'case':str(self.seqs[index])}
 		return sample
+	
+	def _remove_extra_exposures(self, bunch):
+		stride = ceil(len(bunch) / self.n_frames)
+		images = [bunch[i] for i in range(1, (self.n_frames-1)*stride, stride)]
+		images.append(bunch[-1])
+		return images
 
 	def __len__(self):
 		return len(self.seqs)
