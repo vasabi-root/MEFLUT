@@ -67,32 +67,37 @@ def calc_grad(img, window_size):
     return grad_abs, grad_ang
 
 
-def calc_grad_seq(X, Ys, window_size):
-    K, C, H, W = Ys.shape
-    grad_Y_abs, grad_Y_ang  = calc_grad(Ys, window_size)
-    grad_X_abs, grad_X_ang  = calc_grad(X, window_size)
-    grad_X_sq_abs, grad_X_sq_ang  = calc_grad(X**2, window_size)
-    grad_Y_sq_abs, grad_Y_sq_ang  = calc_grad(Ys**2, window_size)
-    grad_XY_abs, grad_XY_ang  = calc_grad(X * Ys, window_size)
+def calc_grad_ssim(output, bunch, window_size):
+    K, C, H, W = bunch.shape
+    grad_Y_abs, grad_Y_ang  = calc_grad(bunch, window_size)
+    grad_X_abs, grad_X_ang  = calc_grad(output, window_size)
+    grad_X_sq_abs, grad_X_sq_ang  = calc_grad(output**2, window_size)
+    grad_Y_sq_abs, grad_Y_sq_ang  = calc_grad(bunch**2, window_size)
+    grad_XY_abs, grad_XY_ang  = calc_grad(output * bunch, window_size)
 
-    grad_X_sq_abs = clamp_min(grad_X_sq_abs - grad_X_abs**2)
-    grad_Y_sq_abs = clamp_min(grad_Y_sq_abs - grad_Y_abs**2)
-    grad_XY_abs = clamp_min(grad_XY_abs - grad_X_abs * grad_Y_abs)
+    grad_X_cov_abs = clamp_min(grad_X_sq_abs - grad_X_abs**2)
+    grad_Y_cov_abs = clamp_min(grad_Y_sq_abs - grad_Y_abs**2)
+    grad_XY_cov_abs = clamp_min(grad_XY_abs - grad_X_abs * grad_Y_abs)
 
-    grad_X_sq_ang = clamp_min(grad_X_sq_ang - grad_X_ang**2)
-    grad_Y_sq_ang = clamp_min(grad_Y_sq_ang - grad_Y_ang**2)
-    grad_XY_ang = clamp_min(grad_XY_ang - grad_X_ang * grad_Y_ang)
+    grad_X_cov_ang = clamp_min(grad_X_sq_ang - grad_X_ang**2)
+    grad_Y_cov_ang = clamp_min(grad_Y_sq_ang - grad_Y_ang**2)
+    grad_XY_cov_ang = clamp_min(grad_XY_ang - grad_X_ang * grad_Y_ang)
 
-    denominator_abs = clamp_min(grad_X_sq_abs + grad_Y_sq_abs)
-    denominator_ang = clamp_min(grad_X_sq_ang + grad_Y_sq_ang)
+    grad_covs_abs = (2 * grad_XY_cov_abs) / clamp_min(grad_X_cov_abs + grad_Y_cov_abs)
+    grad_covs_ang = (2 * grad_XY_cov_ang) / clamp_min(grad_X_cov_ang + grad_Y_cov_ang)
 
-    grad_seq_abs = (2 * grad_XY_abs) / denominator_abs
-    grad_seq_ang = (2 * grad_XY_ang) / denominator_ang
+    grad_means_abs = (2*grad_X_abs*grad_Y_abs / clamp_min(grad_X_abs**2 + grad_Y_abs**2))
+    grad_means_ang = (2*grad_X_ang*grad_Y_ang / clamp_min(grad_X_ang**2 + grad_Y_ang**2))
 
-    grad_seq_abs = torch.clamp(grad_seq_abs, 0, 1)
-    grad_seq_ang = torch.clamp(grad_seq_ang, 0, 1)
-    # plot_weights(grad_seq_ang.view(K, H, W), grad_X_abs.view(H, W), grad_X_ang.view(H, W))
-    return grad_seq_ang * grad_seq_abs
+    grad_ssim_abs = grad_means_abs * grad_covs_abs
+    grad_ssim_ang = grad_means_ang * grad_covs_ang
+    
+    grad_ssim_abs = torch.clamp(grad_ssim_abs, 0, 1)
+    grad_ssim_ang = torch.clamp(grad_ssim_ang, 0, 1)
+    
+    # plot_imgs(grad_ssim_abs.view(H, W), grad_ssim_ang.view(H, W))
+
+    return grad_ssim_abs * grad_ssim_ang
 
 
 def _mef_ssim(X, Ys, window, ws, denom_g, denom_l, C1, C2, is_lum=False, full=False):
@@ -121,8 +126,8 @@ def _mef_ssim(X, Ys, window, ws, denom_g, denom_l, C1, C2, is_lum=False, full=Fa
     cs_seq = (2 * sigmaXY + C2) / torch.clamp(sigmaX_sq + sigmaY_sq_seq + C2, min=1e-6)
     cs_map = torch.gather(cs_seq.view(K, -1), 0, patch_index.view(1, -1)).view(H, W)
 
-    grad_seq = calc_grad_seq(X, Ys, ws).view(K, H, W)
-    grad_map = torch.gather(grad_seq.view(K, -1), 0, patch_index.view(1, -1)).view(H, W)
+    # grad_seq = calc_grad_ssim(X, Ys, ws).view(K, H, W)
+    # grad_map = torch.gather(grad_seq.view(K, -1), 0, patch_index.view(1, -1)).view(H, W)
     if is_lum:
         lY = torch.mean(muY_seq.view(K, -1), dim=1)
         lL = torch.exp(-((muY_seq - 0.5) ** 2) / denom_l)
@@ -139,11 +144,11 @@ def _mef_ssim(X, Ys, window, ws, denom_g, denom_l, C1, C2, is_lum=False, full=Fa
 
     if full:
         l = torch.mean(l_map)
-        grad = torch.mean(grad_map)
+        # grad = torch.mean(grad_map)
         cs = torch.mean(cs_map)
-        return l*grad, cs
+        return l, cs
 
-    qmap = l_map * cs_map * grad_map
+    qmap = l_map * cs_map
     q = qmap.mean()
 
     return q
@@ -160,7 +165,7 @@ def mef_ssim(X, Ys, window_size=11, is_lum=False):
     return _mef_ssim(X, Ys, window, window_size, 0.08, 0.08, 0.01**2, 0.03**2, is_lum)
 
 
-def mef_msssim(X, Ys, window, ws, denom_g, denom_l, C1, C2, is_lum=False):
+def mef_msssim(X, Ys, window, ws, denom_g, denom_l, C1, C2, is_lum=False, full=False):
     # beta = torch.Tensor([0.0710, 0.4530, 0.4760])
     # beta = torch.Tensor([0.0448, 0.2856, 0.3001, 0.2363, 0.1333])
     # beta = torch.Tensor([1, 1, 1, 1, 1])
@@ -184,6 +189,8 @@ def mef_msssim(X, Ys, window, ws, denom_g, denom_l, C1, C2, is_lum=False):
 
     Ql = torch.stack(l_i)
     Qcs = torch.stack(cs_i)
+    if full:
+        return torch.prod(Ql ** beta), torch.prod(Qcs ** beta) 
 
     return torch.prod(Ql ** beta) * torch.prod(Qcs ** beta) 
 
@@ -231,7 +238,7 @@ class MEF_MSSSIM(torch.nn.Module):
         self.C2 = c2**2
         self.is_lum = is_lum
 
-    def forward(self, X, Ys):
+    def forward(self, X, Ys, full=False):
         (_, channel, _, _) = Ys.size()
 
         if channel == self.channel and self.window.data.type() == Ys.data.type():
@@ -247,4 +254,4 @@ class MEF_MSSSIM(torch.nn.Module):
             self.channel = channel
 
         return mef_msssim(X, Ys, window, self.window_size,
-                          self.denom_g, self.denom_l, self.C1, self.C2, self.is_lum)
+                          self.denom_g, self.denom_l, self.C1, self.C2, self.is_lum, full)
